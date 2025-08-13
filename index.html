@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Colorful Water Trail</title>
-    <meta name="description" content="Draw colorful trails with your finger like a paintbrush." />
+    <title>Glowing Brush + Path Challenge</title>
+    <meta name="description" content="Draw glowing trails and fill a path without stopping." />
     <meta name="theme-color" content="#0b1020" />
     <link rel="manifest" href="manifest.json" />
     <style>
@@ -27,12 +27,17 @@
         color: white;
         font-family: sans-serif;
       }
+      #score {
+        font-weight: bold;
+        font-size: 1.1rem;
+      }
       canvas {
         flex: 1;
         display: block;
         width: 100%;
         height: 100%;
         cursor: crosshair;
+        touch-action: none;
       }
       select, button {
         background: #1e2735;
@@ -58,6 +63,7 @@
         <option value="blue">Blue</option>
       </select>
       <button id="resetBtn">Reset</button>
+      <div id="score">Score: 0</div>
     </div>
     <canvas id="canvas"></canvas>
     <script>
@@ -71,6 +77,8 @@
 
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d', { alpha: false });
+      const scoreEl = document.getElementById('score');
+      const controls = document.getElementById('controls');
       let width, height, dpr;
 
       function resize() {
@@ -85,7 +93,6 @@
         ctx.lineJoin = 'round';
       }
 
-      const controls = document.getElementById('controls');
       window.addEventListener('resize', resize);
       resize();
 
@@ -106,7 +113,7 @@
       });
 
       resetBtn.addEventListener('click', () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        resetGame();
       });
 
       function getBrushColor() {
@@ -120,12 +127,139 @@
         }
       }
 
+      // Brush glow and drawing
+      function drawLine(x1, y1, x2, y2) {
+        ctx.shadowColor = getBrushColor();
+        ctx.shadowBlur = 15;
+        ctx.strokeStyle = getBrushColor();
+        ctx.lineWidth = 15;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
+      // Random winding path generation
+      let pathPoints = [];
+      const PATH_SEGMENTS = 10;
+      const PATH_WIDTH = 40; // pixels around center to count as hit
+      let currentPathIndex = 0;
+      let score = 0;
+      let lastPointerInsidePath = false;
+
+      function generateRandomPath() {
+        pathPoints = [];
+        const margin = 50;
+        let x = margin + Math.random() * (width - 2 * margin);
+        let y = margin + Math.random() * (height - 2 * margin);
+        pathPoints.push({ x, y });
+
+        for (let i = 1; i < PATH_SEGMENTS; i++) {
+          // Random next point, constrained so path stays visible
+          x += (Math.random() - 0.5) * 150;
+          y += (Math.random() - 0.5) * 150;
+          x = Math.min(Math.max(margin, x), width - margin);
+          y = Math.min(Math.max(margin, y), height - margin);
+          pathPoints.push({ x, y });
+        }
+        currentPathIndex = 0;
+      }
+
+      function drawPath() {
+        ctx.save();
+        ctx.strokeStyle = '#555555';
+        ctx.lineWidth = PATH_WIDTH;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = 0.2;
+        ctx.beginPath();
+        ctx.moveTo(pathPoints[0].x, pathPoints[0].y);
+        for (let i = 1; i < pathPoints.length; i++) {
+          ctx.lineTo(pathPoints[i].x, pathPoints[i].y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function distanceToSegment(px, py, x1, y1, x2, y2) {
+        // Compute shortest distance from point to segment
+        const A = px - x1;
+        const B = py - y1;
+        const C = x2 - x1;
+        const D = y2 - y1;
+
+        const dot = A * C + B * D;
+        const len_sq = C * C + D * D;
+        let param = -1;
+        if (len_sq !== 0) param = dot / len_sq;
+
+        let xx, yy;
+
+        if (param < 0) {
+          xx = x1;
+          yy = y1;
+        } else if (param > 1) {
+          xx = x2;
+          yy = y2;
+        } else {
+          xx = x1 + param * C;
+          yy = y1 + param * D;
+        }
+
+        const dx = px - xx;
+        const dy = py - yy;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+
+      function checkPointerOnPath(x, y) {
+        // Check if pointer is within PATH_WIDTH of current segment
+        if (currentPathIndex >= pathPoints.length - 1) return false;
+        const p1 = pathPoints[currentPathIndex];
+        const p2 = pathPoints[currentPathIndex + 1];
+        const dist = distanceToSegment(x, y, p1.x, p1.y, p2.x, p2.y);
+        return dist <= PATH_WIDTH;
+      }
+
+      function advancePathIfNeeded(x, y) {
+        if (checkPointerOnPath(x, y)) {
+          // Move forward if close to next segment end
+          const p2 = pathPoints[currentPathIndex + 1];
+          if (Math.hypot(x - p2.x, y - p2.y) < PATH_WIDTH / 2) {
+            currentPathIndex++;
+            score++;
+            scoreEl.textContent = 'Score: ' + score;
+          }
+          lastPointerInsidePath = true;
+          return true;
+        } else {
+          // Not on path now
+          if (lastPointerInsidePath) {
+            // Broken path — reset score
+            score = 0;
+            currentPathIndex = 0;
+            scoreEl.textContent = 'Score: ' + score;
+          }
+          lastPointerInsidePath = false;
+          return false;
+        }
+      }
+
       function pointerDown(e) {
         drawing = true;
         lastX = e.offsetX;
         lastY = e.offsetY;
         if (colorMode === 'rainbow') {
           hue = Math.random() * 360;
+        }
+        if (!checkPointerOnPath(lastX, lastY)) {
+          // Starting outside path resets score immediately
+          score = 0;
+          currentPathIndex = 0;
+          scoreEl.textContent = 'Score: ' + score;
+          lastPointerInsidePath = false;
+        } else {
+          lastPointerInsidePath = true;
         }
       }
 
@@ -134,13 +268,7 @@
         const x = e.offsetX;
         const y = e.offsetY;
 
-        ctx.strokeStyle = getBrushColor();
-        ctx.lineWidth = 15;
-        ctx.beginPath();
-        ctx.moveTo(lastX, lastY);
-        ctx.lineTo(x, y);
-        ctx.stroke();
-
+        drawLine(lastX, lastY, x, y);
         lastX = x;
         lastY = y;
 
@@ -148,16 +276,42 @@
           hue += 2;
           if (hue >= 360) hue -= 360;
         }
+
+        advancePathIfNeeded(x, y);
       }
 
       function pointerUp() {
         drawing = false;
+        lastPointerInsidePath = false;
+        // Reset score on lift to enforce no stopping
+        score = 0;
+        currentPathIndex = 0;
+        scoreEl.textContent = 'Score: ' + score;
       }
 
       canvas.addEventListener('pointerdown', pointerDown);
       canvas.addEventListener('pointermove', pointerMove);
       window.addEventListener('pointerup', pointerUp);
       window.addEventListener('pointercancel', pointerUp);
+
+      function resetGame() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        generateRandomPath();
+        score = 0;
+        currentPathIndex = 0;
+        scoreEl.textContent = 'Score: ' + score;
+      }
+
+      resetGame();
+
+      // Draw loop to redraw path under strokes (so it's always visible)
+      function redraw() {
+        // Clear only path area background
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawPath();
+        requestAnimationFrame(redraw);
+      }
+      requestAnimationFrame(redraw);
     </script>
   </body>
 </html>
