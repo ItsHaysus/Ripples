@@ -35,6 +35,7 @@
       #canvas-container {
         position: relative;
         flex: 1;
+        height: 100%;
       }
       canvas {
         position: absolute;
@@ -171,7 +172,6 @@
       }
 
       function drawPath() {
-        // Clear path canvas
         pathCtx.clearRect(0, 0, pathCanvas.width, pathCanvas.height);
 
         pathCtx.save();
@@ -313,7 +313,7 @@
         scoreEl.textContent = 'Score: ' + score;
       }
 
-      canvasContainer = document.getElementById('canvas-container');
+      const canvasContainer = document.getElementById('canvas-container');
 
       canvasContainer.addEventListener('pointerdown', e => {
         if (e.target === drawCanvas) pointerDown(e);
