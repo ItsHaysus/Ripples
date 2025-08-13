@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Colorful Water Ripples</title>
+    <meta name="description" content="Draw with your finger to create colorful water-like ripples." />
+    <meta name="theme-color" content="#0b1020" />
+    <link rel="manifest" href="manifest.json" />
+    <style>
+      :root{
+        --bg: #0b1020;
+        --fg: #e7ecff;
+        --panel: rgba(255,255,255,.06);
+        --accent: #78a6ff;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: radial-gradient(1200px 800px at 20% 10%, #0f1b3d 0%, var(--bg) 60%);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        touch-action: none; /* allow smooth drawing without the page scrolling */
+      }
+      #app { height: 100%; display: grid; grid-template-rows: 1fr auto; }
+      canvas { width: 100%; height: 100%; display:block; }
+      .hud {
+        display:flex; gap:.75rem; align-items:center; justify-content:center;
+        padding: .75rem 1rem; 
+        background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(0,0,0,.25));
+        border-top: 1px solid rgba(255,255,255,.1);
+        backdrop-filter: blur(8px);
+      }
+      .card { background: var(--panel); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; padding:.6rem .8rem; }
+      .btn { cursor:pointer; border:none; border-radius: 12px; padding:.6rem .9rem; font-weight:600; color:#0b1020; background: linear-gradient(180deg, #a9c7ff, var(--accent)); box-shadow: 0 6px 20px rgba(120,166,255,.25); }
+      .btn:active { transform: translateY(1px); }
+      .slider { accent-color: var(--accent); }
+      .hint { opacity:.8; font-size:.9rem; }
+      .brand { position: fixed; top: 10px; left: 10px; padding:.35rem .6rem; font-size:.8rem; border-radius: 10px; background: var(--panel); border:1px solid rgba(255,255,255,.1); }
+    </style>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('service-worker.js');
+        });
+      }
+    </script>
+    <script>
+      const { useEffect, useRef, useState } = React;
+
+      function useRaf(callback) {
+        const cbRef = useRef(callback);
+        cbRef.current = callback;
+        useEffect(() => {
+          let rafId;
+          const loop = (t) => { cbRef.current(t); rafId = requestAnimationFrame(loop); };
+          rafId = requestAnimationFrame(loop);
+          return () => cancelAnimationFrame(rafId);
+        }, []);
+      }
+
+      function fitCanvasToDisplay(canvas) {
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const { clientWidth:w, clientHeight:h } = canvas;
+        if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+          canvas.width  = Math.floor(w * dpr);
+          canvas.height = Math.floor(h * dpr);
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.globalCompositeOperation = 'lighter'; // additive for glow
+        return { ctx, dpr };
+      }
+
+      function RippleSketch() {
+        const canvasRef = useRef(null);
+        const [intensity, setIntensity] = useState(1.0); // how many drops per move
+        const [drag, setDrag] = useState(0.015); // trail persistence
+        const dropsRef = useRef([]);
+        const pointerRef = useRef({ down:false, x:0, y:0, lastX:0, lastY:0, t:0 });
+
+        // handle resize
+        useEffect(() => {
+          const onResize = () => fitCanvasToDisplay(canvasRef.current);
+          window.addEventListener('resize', onResize);
+          onResize();
+          return () => window.removeEventListener('resize', onResize);
+        }, []);
+
+        // pointer events
+        useEffect(() => {
+          const c = canvasRef.current;
+          const state = pointerRef.current;
+          const getPos = (e) => {
+            const rect = c.getBoundingClientRect();
+            if (e.touches && e.touches[0]) {
+              return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+            }
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          };
+          const down = (e) => { e.preventDefault(); state.down = true; const p = getPos(e); state.x = state.lastX = p.x; state.y = state.lastY = p.y; state.t = performance.now(); addDrop(p.x,p.y, true); };
+          const up   = (e) => { e.preventDefault(); state.down = false; };
+          const move = (e) => {
+            if (!state.down) return;
+            e.preventDefault();
+            const p = getPos(e);
+            const dx = p.x - state.lastX, dy = p.y - state.lastY;
+            const dist = Math.hypot(dx,dy) + 0.001;
+            const steps = Math.min(48, Math.ceil((dist/6) * intensity));
+            for (let i=1;i<=steps;i++) {
+              const x = state.lastX + (dx * i/steps);
+              const y = state.lastY + (dy * i/steps);
+              addDrop(x,y,false);
+            }
+            state.lastX = p.x; state.lastY = p.y;
+          };
+          c.addEventListener('pointerdown', down, {passive:false});
+          window.addEventListener('pointerup', up, {passive:false});
+          window.addEventListener('pointercancel', up, {passive:false});
+          c.addEventListener('pointermove', move, {passive:false});
+          // Prevent double-tap zoom on iOS
+          c.addEventListener('touchstart', (e)=>{ if (e.touches.length>1) e.preventDefault(); }, {passive:false});
+          return () => {
+            c.removeEventListener('pointerdown', down);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', up);
+            c.removeEventListener('pointermove', move);
+          };
+        }, [intensity]);
+
+        function addDrop(x,y,burst) {
+          const hue = (Math.random()*360)|0;
+          dropsRef.current.push({ x, y, t: performance.now(), r: 0, life: 0, hue, burst });
+        }
+
+        useRaf((t) => {
+          const canvas = canvasRef.current; if (!canvas) return;
+          const { ctx } = fitCanvasToDisplay(canvas);
+          const w = canvas.clientWidth, h = canvas.clientHeight;
+
+          // Fade the previous frame for a smooth trail
+          ctx.fillStyle = `rgba(9, 14, 32, ${drag})`;
+          ctx.fillRect(0,0,w,h);
+
+          // Update & draw ripples
+          const drops = dropsRef.current;
+          const now = performance.now();
+          for (let i=drops.length-1; i>=0; i--) {
+            const d = drops[i];
+            const age = (now - d.t) / 1000; // seconds
+            d.r = age * 280; // wavefront speed
+            d.life = age;
+            if (d.r > 900) { drops.splice(i,1); continue; }
+
+            // Multiple concentric sine rings for a watery look
+            const rings = 3;
+            for (let k=0;k<rings;k++) {
+              const phase = k * 0.8;
+              const radius = Math.max(0, d.r - k*12);
+              const alpha = Math.max(0, 0.45 - age*0.28 - k*0.06);
+              if (alpha <= 0) continue;
+              ctx.beginPath();
+              ctx.arc(d.x, d.y, radius, 0, Math.PI*2);
+              const hue = (d.hue + k*15 + age*40) % 360;
+              ctx.strokeStyle = `hsla(${hue}, 95%, 65%, ${alpha})`;
+              ctx.lineWidth = Math.max(0.7, 3 - age*2 - k*0.3);
+              ctx.stroke();
+            }
+          }
+        });
+
+        const clear = () => {
+          dropsRef.current = [];
+          const c = canvasRef.current; const { ctx } = fitCanvasToDisplay(c);
+          ctx.clearRect(0,0,c.clientWidth,c.clientHeight);
+        };
+
+        return React.createElement(
+          'div', { style:{height:'100%', position:'relative'} },
+          React.createElement('div', { className:'brand' }, 'Colorful Water Ripples'),
+          React.createElement('canvas', { ref:canvasRef, id:'ripple-canvas', role:'img', 'aria-label':'Interactive colorful water ripples'}),
+          React.createElement('div', { className:'hud' },
+            React.createElement('div', { className:'card hint' }, 'Draw with your finger or mouse'),
+            React.createElement('button', { className:'btn', onClick: clear }, 'Clear'),
+            React.createElement('div', { className:'card' },
+              React.createElement('label', null, 'Intensity '),
+              React.createElement('input', {
+                className:'slider', type:'range', min:0.4, max:2.2, step:0.1,
+                value:intensity, onChange:(e)=>setIntensity(parseFloat(e.target.value))
+              }),
+              React.createElement('span', { style:{marginLeft:8, opacity:.85} }, intensity.toFixed(1))
+            ),
+            React.createElement('div', { className:'card' },
+              React.createElement('label', null, 'Trail '),
+              React.createElement('input', {
+                className:'slider', type:'range', min:0.005, max:0.06, step:0.005,
+                value:drag, onChange:(e)=>setDrag(parseFloat(e.target.value))
+              }),
+              React.createElement('span', { style:{marginLeft:8, opacity:.85} }, drag.toFixed(3))
+            )
+          )
+        );
+      }
+
+      function App(){
+        return React.createElement('div', {id:'app-inner', style:{height:'100%'}}, React.createElement(RippleSketch));
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('app'));
+      root.render(React.createElement(App));
+    </script>
+  </body>
+</html>
+
+
+<!-- manifest.json -->
+{
+  "name": "Colorful Water Ripples",
+  "short_name": "Ripples",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
+
+// service-worker.js
+const CACHE_NAME = 'ripples-cache-v1';
+const ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png'
+];
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+});
+self.addEventListener('fetch', e => {
+  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+});
